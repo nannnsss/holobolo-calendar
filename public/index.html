@@ -8,22 +8,12 @@
   <script src="https://cdn.jsdelivr.net/npm/@event-calendar/build@5.4.1/dist/event-calendar.min.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: system-ui, -apple-system, sans-serif; min-height: 100vh; }
-
-    .ec-day-grid & {
-    --ec-row-height: auto;
-    grid-template-columns: repeat(var(--ec-grid-cols), minmax(0, 1fr));
-    grid-template-rows: max-content repeat(var(--ec-grid-rows), var(--ec-row-height));
-
-    &.ec-uniform {
-        --ec-row-height: minmax(0, 1fr);
-        overflow: hidden;
-        flex-grow: 1;
-    }
+    body { font-family: system-ui, -apple-system, sans-serif; height: 100vh; overflow: hidden; padding: 1rem; }
+    #ec { height: 100vh; }
 
     /* ── Modal overlay ── */
     .modal-overlay {
-      display: none;
+      display: none !important;
       position: fixed;
       inset: 0;
       background: rgba(0, 0, 0, 0.45);
@@ -31,7 +21,7 @@
       justify-content: center;
       align-items: center;
     }
-    .modal-overlay.open { display: flex; }
+    .modal-overlay.open { display: flex !important; }
 
     /* ── Modal box ── */
     .modal {
@@ -223,10 +213,47 @@
       color: #9ca3af;
       font-style: italic;
     }
+
+    /* ── Add Event button ── */
+    .add-event-btn {
+      position: fixed;
+      bottom: 28px;
+      right: 28px;
+      z-index: 999;
+      background: #6366f1;
+      color: #fff;
+      border: none;
+      border-radius: 50px;
+      padding: 14px 24px;
+      font-size: 15px;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      box-shadow: 0 4px 16px rgba(99, 102, 241, 0.4);
+      transition: background 0.15s, transform 0.1s, box-shadow 0.15s;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .add-event-btn:hover {
+      background: #4f46e5;
+      transform: translateY(-1px);
+      box-shadow: 0 6px 20px rgba(99, 102, 241, 0.5);
+    }
+    .add-event-btn svg {
+      width: 18px;
+      height: 18px;
+    }
   </style>
 </head>
 <body>
   <div id="ec"></div>
+
+  <!-- Floating Add Event button -->
+  <button class="add-event-btn" onclick="openCreateModalNow()">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    Add Event
+  </button>
 
   <!-- ═══ CREATE / EDIT MODAL ═══ -->
   <div class="modal-overlay" id="createModal">
@@ -386,6 +413,17 @@
     // ══════════════════════════════════
     //  CREATE / EDIT MODAL
     // ══════════════════════════════════
+
+    // Called from the Add Event button (no date context — defaults to today)
+    function openCreateModalNow() {
+      const now = new Date();
+      openCreateModal({
+        start: now,
+        end: now,
+        allDay: true
+      });
+    }
+
     function openCreateModal(info) {
       editingEventId = null;
       document.getElementById('createModalTitle').textContent = 'New Event';
@@ -668,15 +706,23 @@
           end: 'dayGridMonth,timeGridWeek,timeGridDay,listWeek'
         },
         editable: true,
-        selectable: true,
         events: events,
         eventColor: '#6366f1',
         nowIndicator: true,
         dayMaxEvents: true,
 
+        // Resize calendar to make month cells square
+        viewDidMount: function (info) {
+          requestAnimationFrame(() => adjustMonthHeight());
+        },
+
         // Click on empty date/time → open create modal
-        select: function (info) {
-          openCreateModal(info);
+        dateClick: function (info) {
+          openCreateModal({
+            start: info.date,
+            end: info.date,
+            allDay: info.allDay !== undefined ? info.allDay : true
+          });
         },
 
         // Click existing event → open view modal
@@ -721,6 +767,51 @@
         }
       });
     }
+
+    // ── Make month view cells square (capped at 100vh) ──
+    function adjustMonthHeight() {
+      const wrapper = document.getElementById('ec');
+      const ecEl = wrapper.querySelector('.ec') || wrapper;
+      const main = wrapper.querySelector('.ec-main');
+      if (!main) return;
+
+      // Only adjust in dayGridMonth
+      const isDayGrid = ecEl.classList.contains('ec-day-grid');
+      if (!isDayGrid) {
+        wrapper.style.height = '100vh';
+        main.style.removeProperty('--ec-row-height');
+        main.classList.add('ec-uniform');
+        return;
+      }
+
+      // Count actual day rows
+      const dayCells = main.querySelectorAll('.ec-body .ec-day');
+      const numRows = dayCells.length > 0 ? Math.ceil(dayCells.length / 7) : 6;
+
+      // Cell width if we went for perfect squares
+      const cellWidthIdeal = main.offsetWidth / 7;
+
+      // Measure fixed chrome (toolbar + column headers)
+      const toolbar = wrapper.querySelector('.ec-toolbar');
+      const toolbarH = toolbar ? toolbar.offsetHeight : 0;
+      const header = main.querySelector('.ec-header');
+      const headerH = header ? header.offsetHeight : 28;
+      const chrome = toolbarH + headerH + 4;
+
+      // Available space for rows within 100vh
+      const availableForRows = window.innerHeight - chrome;
+
+      // Use the smaller of: ideal square size, or what fits in viewport
+      const rowHeight = Math.min(cellWidthIdeal, availableForRows / numRows);
+
+      main.classList.remove('ec-uniform');
+      main.style.setProperty('--ec-row-height', rowHeight + 'px');
+      wrapper.style.height = '100vh';
+    }
+
+    window.addEventListener('resize', () => {
+      adjustMonthHeight();
+    });
 
     init();
   </script>
