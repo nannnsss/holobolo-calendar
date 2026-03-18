@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HoloBolo Calendar</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@event-calendar/build@5.4.1/dist/event-calendar.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/@event-calendar/build@5.4.1/dist/event-calendar.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, sans-serif; height: 100vh; }
+    #ec { min-height: 100%; }
+  </style>
+</head>
+<body>
+  <div id="ec"></div>
+
+  <script>
+    // Helper: generate a unique ID
+    function uid() {
+      return Date.now().toString(36) + Math.random().toString(36).slice(2);
+    }
+
+    // API helpers
+    async function apiGet(url) {
+      const res = await fetch(url);
+      return res.json();
+    }
+
+    async function apiPost(url, data) {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+      return res.json();
+    }
+
+    async function apiPut(url, data) {
+      const res = await fetch(url, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+      return res.json();
+    }
+
+    async function apiDelete(url) {
+      const res = await fetch(url, { method: 'DELETE' });
+      return res.json();
+    }
+
+    // Initialize calendar
+    async function init() {
+      // Load existing events from the backend
+      let events = [];
+      try {
+        events = await apiGet('/api/events');
+      } catch (e) {
+        console.error('Failed to load events:', e);
+      }
+
+      let ec = EventCalendar.create(document.getElementById('ec'), {
+        view: 'dayGridMonth',
+        headerToolbar: {
+          start: 'prev,next today',
+          center: 'title',
+          end: 'dayGridMonth,timeGridWeek,timeGridDay,listWeek'
+        },
+        editable: true,
+        selectable: true,
+        events: events,
+        eventColor: '#hsl(239, 100%, 80%)',
+        nowIndicator: true,
+        dayMaxEvents: true,
+
+        // Click on empty date/time to create event
+        select: async function (info) {
+          var title = prompt('Event title:');
+          if (title) {
+            var event = {
+              id: uid(),
+              title: title,
+              start: info.start,
+              end: info.end,
+              allDay: info.allDay,
+              color: '#hsl(239, 100%, 80%)'
+            };
+            // Save to backend
+            try {
+              await apiPost('/api/events', event);
+              ec.addEvent(event);
+            } catch (e) {
+              console.error('Failed to create event:', e);
+              alert('Failed to save event. Please try again.');
+            }
+          }
+          ec.unselect();
+        },
+
+        // Click on existing event to edit/delete
+        eventClick: async function (info) {
+          var action = prompt(
+            'Event: ' + info.event.title + '\n\n' +
+            'Type "delete" to remove, or enter a new title to rename:'
+          );
+
+          if (action === null) return; // cancelled
+
+          if (action.toLowerCase() === 'delete') {
+            try {
+              await apiDelete('/api/events/' + info.event.id);
+              ec.removeEventById(info.event.id);
+            } catch (e) {
+              console.error('Failed to delete event:', e);
+            }
+          } else if (action.trim() !== '') {
+            var updated = {
+              id: info.event.id,
+              title: action,
+              start: info.event.start,
+              end: info.event.end,
+              allDay: info.event.allDay,
+              color: info.event.backgroundColor
+            };
+            try {
+              await apiPut('/api/events/' + info.event.id, updated);
+              ec.updateEvent(updated);
+            } catch (e) {
+              console.error('Failed to update event:', e);
+            }
+          }
+        },
+
+        // Drag event to a new time/date
+        eventDrop: async function (info) {
+          var event = info.event;
+          try {
+            await apiPut('/api/events/' + event.id, {
+              id: event.id,
+              title: event.title,
+              start: event.start,
+              end: event.end,
+              allDay: event.allDay,
+              color: event.backgroundColor
+            });
+          } catch (e) {
+            console.error('Failed to update event:', e);
+            info.revert();
+          }
+        },
+
+        // Resize event duration
+        eventResize: async function (info) {
+          var event = info.event;
+          try {
+            await apiPut('/api/events/' + event.id, {
+              id: event.id,
+              title: event.title,
+              start: event.start,
+              end: event.end,
+              allDay: event.allDay,
+              color: event.backgroundColor
+            });
+          } catch (e) {
+            console.error('Failed to update event:', e);
+            info.revert();
+          }
+        }
+      });
+    }
+
+    init();
+  </script>
+</body>
+</html>
