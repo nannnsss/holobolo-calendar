@@ -14,7 +14,8 @@ app.get('/api/events', (req, res) => {
     const events = db.prepare('SELECT * FROM events ORDER BY start ASC').all();
     const parsed = events.map(e => ({
       ...e,
-      allDay: Boolean(e.allDay)
+      allDay: Boolean(e.allDay),
+      extendedProps: { description: e.description || '' }
     }));
     res.json(parsed);
   } catch (err) {
@@ -26,13 +27,13 @@ app.get('/api/events', (req, res) => {
 // POST /api/events
 app.post('/api/events', (req, res) => {
   try {
-    const { id, title, start, end, allDay, color } = req.body;
+    const { id, title, start, end, allDay, color, description } = req.body;
     if (!id || !title || !start || !end) {
       return res.status(400).json({ error: 'id, title, start, and end are required' });
     }
     db.prepare(
-      'INSERT INTO events (id, title, start, end, allDay, color) VALUES (?, ?, ?, ?, ?, ?)'
-    ).run(id, title, start, end, allDay ? 1 : 0, color || '#hsl(239, 100%, 80%)');
+      'INSERT INTO events (id, title, start, end, allDay, color, description) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(id, title, start, end, allDay ? 1 : 0, color || '#6366f1', description || '');
     res.status(201).json({ success: true });
   } catch (err) {
     console.error('Error creating event:', err);
@@ -43,18 +44,19 @@ app.post('/api/events', (req, res) => {
 // PUT /api/events/:id
 app.put('/api/events/:id', (req, res) => {
   try {
-    const { title, start, end, allDay, color } = req.body;
+    const { title, start, end, allDay, color, description } = req.body;
     const existing = db.prepare('SELECT * FROM events WHERE id = ?').get(req.params.id);
     if (!existing) return res.status(404).json({ error: 'Event not found' });
 
     db.prepare(
-      'UPDATE events SET title = ?, start = ?, end = ?, allDay = ?, color = ? WHERE id = ?'
+      'UPDATE events SET title = ?, start = ?, end = ?, allDay = ?, color = ?, description = ? WHERE id = ?'
     ).run(
       title ?? existing.title,
       start ?? existing.start,
       end ?? existing.end,
       allDay !== undefined ? (allDay ? 1 : 0) : existing.allDay,
       color ?? existing.color,
+      description !== undefined ? description : (existing.description || ''),
       req.params.id
     );
     res.json({ success: true });
@@ -93,6 +95,10 @@ app.get('/api/events.ics', (req, res) => {
       ical.push('BEGIN:VEVENT');
       ical.push('UID:' + event.id + '@holobolo.org');
       ical.push('SUMMARY:' + event.title.replace(/[,;\\]/g, '\\$&'));
+      if (event.description) {
+        const desc = 'DESCRIPTION:' + event.description.replace(/\n/g, '\\n').replace(/[,;\\]/g, '\\$&');
+        ical.push(desc);
+      }
       if (event.allDay) {
         ical.push('DTSTART;VALUE=DATE:' + event.start.split('T')[0].replace(/-/g, ''));
         ical.push('DTEND;VALUE=DATE:' + event.end.split('T')[0].replace(/-/g, ''));
