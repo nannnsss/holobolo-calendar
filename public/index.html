@@ -5,54 +5,436 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>HoloBolo Calendar</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@event-calendar/build@5.4.1/dist/event-calendar.min.css">
+  <link rel="stylesheet" href="/style.css">
   <script src="https://cdn.jsdelivr.net/npm/@event-calendar/build@5.4.1/dist/event-calendar.min.js"></script>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: system-ui, -apple-system, sans-serif; height: 100vh; }
-    #ec { min-height: 100%; }
-  </style>
 </head>
 <body>
   <div id="ec"></div>
 
+  <!-- new event / edit event modal-->
+  <div class="modal-overlay" id="createModal">
+    <div class="modal">
+      <div class="modal-header">
+        <h2 id="createModalTitle">New Event</h2>
+        <button class="modal-close" onclick="closeCreateModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="field">
+          <label for="eventTitle">Title</label>
+          <input type="text" id="eventTitle" placeholder="What's happening?" autofocus>
+        </div>
+
+        <div class="toggle-row">
+          <label>All day</label>
+          <div class="toggle">
+            <input type="checkbox" id="eventAllDay" onchange="toggleAllDay()">
+            <span class="slider"></span>
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="field">
+            <label for="eventStartDate">Start date</label>
+            <input type="date" id="eventStartDate">
+          </div>
+          <div class="field time-field">
+            <label for="eventStartTime">Start time</label>
+            <input type="time" id="eventStartTime">
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="field">
+            <label for="eventEndDate">End date</label>
+            <input type="date" id="eventEndDate">
+          </div>
+          <div class="field time-field">
+            <label for="eventEndTime">End time</label>
+            <input type="time" id="eventEndTime">
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="eventDesc">Description</label>
+          <textarea id="eventDesc" placeholder="Add notes or details..."></textarea>
+        </div>
+
+        <div class="field">
+          <label>Color</label>
+          <div class="color-options" id="colorPicker"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeCreateModal()">Cancel</button>
+        <button class="btn btn-primary" id="createModalSave" onclick="saveEvent()">Create</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- view event modal-->
+  <div class="modal-overlay" id="viewModal">
+    <div class="modal">
+      <div class="modal-header">
+        <h2>Event Details</h2>
+        <button class="modal-close" onclick="closeViewModal()">&times;</button>
+      </div>
+      <div class="modal-body" id="viewModalBody"></div>
+      <div class="modal-footer">
+        <button class="btn btn-danger" id="viewDeleteBtn" onclick="deleteFromView()">Delete</button>
+        <button class="btn btn-secondary" onclick="closeViewModal()">Close</button>
+        <button class="btn btn-primary" id="viewEditBtn" onclick="editFromView()">Edit</button>
+      </div>
+    </div>
+  </div>
+
   <script>
-    // Helper: generate a unique ID
+    const COLORS = [
+      '#6366f1', '#8b5cf6', '#ec4899', '#ef4444',
+      '#f97316', '#eab308', '#22c55e', '#14b8a6',
+      '#3b82f6', '#6b7280'
+    ];
+    let selectedColor = COLORS[0];
+
+    // Build color dots
+    const picker = document.getElementById('colorPicker');
+    COLORS.forEach(c => {
+      const dot = document.createElement('div');
+      dot.className = 'color-dot' + (c === selectedColor ? ' selected' : '');
+      dot.style.background = c;
+      dot.onclick = () => {
+        picker.querySelectorAll('.color-dot').forEach(d => d.classList.remove('selected'));
+        dot.classList.add('selected');
+        selectedColor = c;
+      };
+      picker.appendChild(dot);
+    });
+
+    // State
+    let ec = null;
+    let editingEventId = null;  // null = creating, string = editing
+    let viewingEventId = null;
+
+    // Helpers
     function uid() {
       return Date.now().toString(36) + Math.random().toString(36).slice(2);
     }
 
-    // API helpers
-    async function apiGet(url) {
-      const res = await fetch(url);
-      return res.json();
+    function toLocalDate(d) {
+      // Returns YYYY-MM-DD in local time
+      const dt = new Date(d);
+      return dt.getFullYear() + '-' +
+        String(dt.getMonth() + 1).padStart(2, '0') + '-' +
+        String(dt.getDate()).padStart(2, '0');
     }
 
+    function toLocalTime(d) {
+      const dt = new Date(d);
+      return String(dt.getHours()).padStart(2, '0') + ':' +
+        String(dt.getMinutes()).padStart(2, '0');
+    }
+
+    function combineDatetime(date, time) {
+      return date + 'T' + (time || '00:00') + ':00';
+    }
+
+    function formatDateNice(d) {
+      const dt = new Date(d);
+      return dt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+    }
+
+    function formatTimeNice(d) {
+      const dt = new Date(d);
+      return dt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    }
+
+    //  API 
+    async function apiGet(url) { return (await fetch(url)).json(); }
     async function apiPost(url, data) {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data)
-      });
-      return res.json();
+      return (await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) })).json();
     }
-
     async function apiPut(url, data) {
-      const res = await fetch(url, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data)
+      return (await fetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) })).json();
+    }
+    async function apiDelete(url) { return (await fetch(url, { method: 'DELETE' })).json(); }
+
+    //  Toggle all-day events
+    function toggleAllDay() {
+      const allDay = document.getElementById('eventAllDay').checked;
+      document.querySelectorAll('.time-field').forEach(el => {
+        el.style.display = allDay ? 'none' : 'block';
       });
-      return res.json();
     }
 
-    async function apiDelete(url) {
-      const res = await fetch(url, { method: 'DELETE' });
-      return res.json();
+    // ══════════════════════════════════
+    //  CREATE / EDIT MODAL
+    // ══════════════════════════════════
+    function openCreateModal(info) {
+      editingEventId = null;
+      document.getElementById('createModalTitle').textContent = 'New Event';
+      document.getElementById('createModalSave').textContent = 'Create';
+      document.getElementById('eventTitle').value = '';
+      document.getElementById('eventDesc').value = '';
+
+      const isAllDay = info.allDay !== undefined ? info.allDay : true;
+      document.getElementById('eventAllDay').checked = isAllDay;
+      toggleAllDay();
+
+      document.getElementById('eventStartDate').value = toLocalDate(info.start);
+      document.getElementById('eventStartTime').value = isAllDay ? '09:00' : toLocalTime(info.start);
+
+      // For end date: if all-day and end equals start (single day click), keep same date
+      let endDate = info.end || info.start;
+      if (isAllDay && endDate) {
+        // EventCalendar gives end as next day for all-day ranges; subtract a day for display
+        const ed = new Date(endDate);
+        if (ed > new Date(info.start)) {
+          ed.setDate(ed.getDate() - 1);
+          endDate = ed;
+        }
+      }
+      document.getElementById('eventEndDate').value = toLocalDate(endDate);
+      document.getElementById('eventEndTime').value = isAllDay ? '10:00' : toLocalTime(info.end || info.start);
+
+      // Reset color
+      selectedColor = COLORS[0];
+      picker.querySelectorAll('.color-dot').forEach(d => {
+        d.classList.toggle('selected', d.style.background === COLORS[0] || d.style.backgroundColor === COLORS[0]);
+      });
+
+      document.getElementById('createModal').classList.add('open');
+      setTimeout(() => document.getElementById('eventTitle').focus(), 50);
     }
 
-    // Initialize calendar
+    function openEditModal(event) {
+      editingEventId = event.id;
+      document.getElementById('createModalTitle').textContent = 'Edit Event';
+      document.getElementById('createModalSave').textContent = 'Save';
+      document.getElementById('eventTitle').value = event.title;
+      document.getElementById('eventDesc').value =
+        (event.extendedProps && event.extendedProps.description) || '';
+
+      const isAllDay = event.allDay;
+      document.getElementById('eventAllDay').checked = isAllDay;
+      toggleAllDay();
+
+      document.getElementById('eventStartDate').value = toLocalDate(event.start);
+      document.getElementById('eventStartTime').value = isAllDay ? '09:00' : toLocalTime(event.start);
+
+      let endDate = event.end || event.start;
+      if (isAllDay && endDate) {
+        const ed = new Date(endDate);
+        if (ed > new Date(event.start)) {
+          ed.setDate(ed.getDate() - 1);
+          endDate = ed;
+        }
+      }
+      document.getElementById('eventEndDate').value = toLocalDate(endDate);
+      document.getElementById('eventEndTime').value = isAllDay ? '10:00' : toLocalTime(event.end || event.start);
+
+      // Set color
+      const evColor = event.backgroundColor || event.color || COLORS[0];
+      selectedColor = evColor;
+      picker.querySelectorAll('.color-dot').forEach(d => {
+        const dotColor = d.style.backgroundColor;
+        // Compare as rgb or hex
+        d.classList.toggle('selected', dotColor === evColor || rgbToHex(dotColor) === evColor);
+      });
+
+      document.getElementById('createModal').classList.add('open');
+      setTimeout(() => document.getElementById('eventTitle').focus(), 50);
+    }
+
+    function closeCreateModal() {
+      document.getElementById('createModal').classList.remove('open');
+      editingEventId = null;
+    }
+
+    async function saveEvent() {
+      const title = document.getElementById('eventTitle').value.trim();
+      if (!title) {
+        document.getElementById('eventTitle').focus();
+        return;
+      }
+
+      const allDay = document.getElementById('eventAllDay').checked;
+      const startDate = document.getElementById('eventStartDate').value;
+      const startTime = document.getElementById('eventStartTime').value;
+      const endDate = document.getElementById('eventEndDate').value;
+      const endTime = document.getElementById('eventEndTime').value;
+      const description = document.getElementById('eventDesc').value.trim();
+
+      let start, end;
+      if (allDay) {
+        start = startDate + 'T00:00:00';
+        // For all-day events, EventCalendar expects end to be the NEXT day (exclusive)
+        const ed = new Date(endDate + 'T00:00:00');
+        ed.setDate(ed.getDate() + 1);
+        end = toLocalDate(ed) + 'T00:00:00';
+      } else {
+        start = combineDatetime(startDate, startTime);
+        end = combineDatetime(endDate, endTime);
+      }
+
+      if (editingEventId) {
+        // Update existing
+        const updated = {
+          id: editingEventId,
+          title, start, end, allDay,
+          color: selectedColor,
+          description
+        };
+        try {
+          await apiPut('/api/events/' + editingEventId, updated);
+          ec.updateEvent({
+            ...updated,
+            extendedProps: { description }
+          });
+        } catch (e) {
+          console.error('Failed to update event:', e);
+          alert('Failed to save. Please try again.');
+          return;
+        }
+      } else {
+        // Create new
+        const event = {
+          id: uid(),
+          title, start, end, allDay,
+          color: selectedColor,
+          description
+        };
+        try {
+          await apiPost('/api/events', event);
+          ec.addEvent({
+            ...event,
+            extendedProps: { description }
+          });
+        } catch (e) {
+          console.error('Failed to create event:', e);
+          alert('Failed to save. Please try again.');
+          return;
+        }
+      }
+
+      closeCreateModal();
+      ec.unselect();
+    }
+
+    // ══════════════════════════════════
+    //  VIEW MODAL
+    // ══════════════════════════════════
+    function openViewModal(event) {
+      viewingEventId = event.id;
+      const desc = (event.extendedProps && event.extendedProps.description) || '';
+      const color = event.backgroundColor || event.color || COLORS[0];
+
+      let timeStr = '';
+      if (event.allDay) {
+        const startStr = formatDateNice(event.start);
+        let endStr = '';
+        if (event.end) {
+          const endDt = new Date(event.end);
+          endDt.setDate(endDt.getDate() - 1);
+          const endFormatted = formatDateNice(endDt);
+          if (endFormatted !== startStr) {
+            endStr = ' — ' + endFormatted;
+          }
+        }
+        timeStr = startStr + endStr + ' (all day)';
+      } else {
+        timeStr = formatDateNice(event.start) + ', ' + formatTimeNice(event.start);
+        if (event.end) {
+          const sameDay = toLocalDate(event.start) === toLocalDate(event.end);
+          if (sameDay) {
+            timeStr += ' – ' + formatTimeNice(event.end);
+          } else {
+            timeStr += ' – ' + formatDateNice(event.end) + ', ' + formatTimeNice(event.end);
+          }
+        }
+      }
+
+      const body = document.getElementById('viewModalBody');
+      body.innerHTML = `
+        <div class="event-detail-title">
+          <span class="dot" style="background:${color}"></span>
+          ${escHtml(event.title)}
+        </div>
+        <div class="event-detail-row">
+          <strong>When</strong>
+          <span>${timeStr}</span>
+        </div>
+        <div class="event-description ${desc ? '' : 'empty'}">
+          ${desc ? escHtml(desc) : 'No description'}
+        </div>
+      `;
+
+      document.getElementById('viewModal').classList.add('open');
+    }
+
+    function closeViewModal() {
+      document.getElementById('viewModal').classList.remove('open');
+      viewingEventId = null;
+    }
+
+    function editFromView() {
+      // Find the event data and open edit modal
+      const events = ec.getEvents();
+      const evt = events.find(e => e.id === viewingEventId);
+      if (evt) {
+        closeViewModal();
+        openEditModal(evt);
+      }
+    }
+
+    async function deleteFromView() {
+      if (!viewingEventId) return;
+      if (!confirm('Delete this event?')) return;
+      try {
+        await apiDelete('/api/events/' + viewingEventId);
+        ec.removeEventById(viewingEventId);
+      } catch (e) {
+        console.error('Failed to delete:', e);
+        alert('Failed to delete event.');
+      }
+      closeViewModal();
+    }
+
+    //  Util 
+    function escHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    function rgbToHex(rgb) {
+      if (!rgb || rgb.startsWith('#')) return rgb;
+      const m = rgb.match(/(\d+)/g);
+      if (!m || m.length < 3) return rgb;
+      return '#' + m.slice(0,3).map(n => parseInt(n).toString(16).padStart(2,'0')).join('');
+    }
+
+    //  Close modals on Escape or overlay click 
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        closeCreateModal();
+        closeViewModal();
+      }
+    });
+    document.getElementById('createModal').addEventListener('click', (e) => {
+      if (e.target === e.currentTarget) closeCreateModal();
+    });
+    document.getElementById('viewModal').addEventListener('click', (e) => {
+      if (e.target === e.currentTarget) closeViewModal();
+    });
+
+    //  Enter key to save in create modal 
+    document.getElementById('eventTitle').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') saveEvent();
+    });
+
+    // ══════════════════════════════════
+    //  INIT CALENDAR
+    // ══════════════════════════════════
     async function init() {
-      // Load existing events from the backend
       let events = [];
       try {
         events = await apiGet('/api/events');
@@ -60,7 +442,7 @@
         console.error('Failed to load events:', e);
       }
 
-      let ec = EventCalendar.create(document.getElementById('ec'), {
+      ec = EventCalendar.create(document.getElementById('ec'), {
         view: 'dayGridMonth',
         headerToolbar: {
           start: 'prev,next today',
@@ -70,69 +452,21 @@
         editable: true,
         selectable: true,
         events: events,
-        eventColor: '#hsl(239, 100%, 80%)',
+        eventColor: '#6366f1',
         nowIndicator: true,
         dayMaxEvents: true,
 
-        // Click on empty date/time to create event
-        select: async function (info) {
-          var title = prompt('Event title:');
-          if (title) {
-            var event = {
-              id: uid(),
-              title: title,
-              start: info.start,
-              end: info.end,
-              allDay: info.allDay,
-              color: '#hsl(239, 100%, 80%)'
-            };
-            // Save to backend
-            try {
-              await apiPost('/api/events', event);
-              ec.addEvent(event);
-            } catch (e) {
-              console.error('Failed to create event:', e);
-              alert('Failed to save event. Please try again.');
-            }
-          }
-          ec.unselect();
+        // Click on empty date/time → open create modal
+        select: function (info) {
+          openCreateModal(info);
         },
 
-        // Click on existing event to edit/delete
-        eventClick: async function (info) {
-          var action = prompt(
-            'Event: ' + info.event.title + '\n\n' +
-            'Type "delete" to remove, or enter a new title to rename:'
-          );
-
-          if (action === null) return; // cancelled
-
-          if (action.toLowerCase() === 'delete') {
-            try {
-              await apiDelete('/api/events/' + info.event.id);
-              ec.removeEventById(info.event.id);
-            } catch (e) {
-              console.error('Failed to delete event:', e);
-            }
-          } else if (action.trim() !== '') {
-            var updated = {
-              id: info.event.id,
-              title: action,
-              start: info.event.start,
-              end: info.event.end,
-              allDay: info.event.allDay,
-              color: info.event.backgroundColor
-            };
-            try {
-              await apiPut('/api/events/' + info.event.id, updated);
-              ec.updateEvent(updated);
-            } catch (e) {
-              console.error('Failed to update event:', e);
-            }
-          }
+        // Click existing event → open view modal
+        eventClick: function (info) {
+          openViewModal(info.event);
         },
 
-        // Drag event to a new time/date
+        // Drag to reschedule
         eventDrop: async function (info) {
           var event = info.event;
           try {
@@ -150,7 +484,7 @@
           }
         },
 
-        // Resize event duration
+        // Resize duration
         eventResize: async function (info) {
           var event = info.event;
           try {
